@@ -157,7 +157,7 @@ def linear_probe(
     model.fit(X_train, y_train)
     pred = model.predict(X_test)
 
-    # Majority-class proportion in the test set: a fair "chance" reference.
+
     _, te_counts = np.unique(y_test, return_counts=True)
     result = {
         "accuracy": float(accuracy_score(y_test, pred)),
