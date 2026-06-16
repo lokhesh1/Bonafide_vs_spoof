@@ -34,12 +34,17 @@ Typical usage from another file
 from __future__ import annotations
 
 import random
+import sys
 from pathlib import Path
-from typing import Callable, Optional, Sequence
+from typing import Callable, Optional, Sequence, Union
 
 import torch
 from torch.utils.data import DataLoader, Dataset, Subset
 import torchaudio
+
+# Sibling helper for the precomputed-embedding mode.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from embedding_io import embedding_path, load_pooled_embedding
 
 
 # --------------------------------------------------------------------------- #
@@ -64,9 +69,24 @@ class AudioMNISTSpeakerDataset(Dataset):
         AudioMNIST clips are < 1 s, so they get padded rather than cut.
     transform:
         Optional callable applied to the fixed-length ``(1, num_samples)``
-        waveform (e.g. MelSpectrogram / MFCC). 
+        waveform (e.g. MelSpectrogram / MFCC). Ignored in ``mode="embedding"``.
     file_ext:
         Audio file extension to glob for (default ``"wav"``).
+    mode:
+        ``"audio"`` (default) returns a waveform; ``"embedding"`` returns a
+        precomputed embedding loaded from ``embedding_dir`` (mirroring the audio
+        folder structure). In embedding mode the index is filtered to clips that
+        actually have an embedding file, so it works with a partial extraction.
+    embedding_dir:
+        Root of the mirrored embedding tree for THIS dataset (e.g.
+        ``embeddings/openai__whisper-base/data``). Required when
+        ``mode="embedding"``.
+    layer:
+        Which layer's mean-pooled vector to return in embedding mode: an ``int``
+        (negative indexes from the top, ``-1`` = last layer) -> ``[dim]``, or
+        ``"all"`` -> ``[num_layers, dim]``.
+    embedding_ext:
+        Embedding file extension, ``"pt"`` (default) or ``"npz"``.
     """
 
     def __init__(
@@ -76,6 +96,10 @@ class AudioMNISTSpeakerDataset(Dataset):
         num_samples: Optional[int] = None,
         transform: Optional[Callable] = None,
         file_ext: str = "wav",
+        mode: str = "audio",
+        embedding_dir: Optional[str | Path] = None,
+        layer: Union[int, str] = -1,
+        embedding_ext: str = "pt",
     ) -> None:
         self.root_dir = Path(root_dir)
         if not self.root_dir.is_dir():
@@ -85,6 +109,14 @@ class AudioMNISTSpeakerDataset(Dataset):
         self.num_samples = int(num_samples) if num_samples is not None else self.target_sample_rate
         self.transform = transform
         self.file_ext = file_ext.lstrip(".")
+
+        if mode not in ("audio", "embedding"):
+            raise ValueError(f"mode must be 'audio' or 'embedding', got {mode!r}")
+        self.mode = mode
+        self.layer = layer
+        self.embedding_ext = embedding_ext.lstrip(".")
+        self.embedding_dir = Path(embedding_dir) if embedding_dir is not None else None
+        self.num_missing_embeddings = 0
 
         # --- discover speaker folders and assign contiguous integer labels ---
         speaker_dirs = sorted(d for d in self.root_dir.iterdir() if d.is_dir())
@@ -106,6 +138,30 @@ class AudioMNISTSpeakerDataset(Dataset):
                 f"No *.{self.file_ext} files found under {self.root_dir!r}"
             )
 
+        if self.mode == "embedding":
+            if self.embedding_dir is None:
+                raise ValueError("embedding_dir is required when mode='embedding'")
+            self._filter_to_existing_embeddings()
+
+    # ----- embedding mode helpers ---------------------------------------- #
+    def _embedding_path(self, audio_path: Path) -> Path:
+        return embedding_path(audio_path, self.root_dir, self.embedding_dir, self.embedding_ext)
+
+    def _filter_to_existing_embeddings(self) -> None:
+        """Drop samples whose embedding file is missing (partial extraction)."""
+        kept: list[tuple[Path, int]] = []
+        for path, label in self.samples:
+            if self._embedding_path(path).is_file():
+                kept.append((path, label))
+            else:
+                self.num_missing_embeddings += 1
+        if not kept:
+            raise RuntimeError(
+                f"No embedding files found under {self.embedding_dir!r}; "
+                "run extract_dataset_embeddings.py first."
+            )
+        self.samples = kept
+
     # ----- public helpers ------------------------------------------------- #
     @property
     def num_speakers(self) -> int:
@@ -121,6 +177,11 @@ class AudioMNISTSpeakerDataset(Dataset):
 
     def __getitem__(self, idx: int):
         path, label = self.samples[idx]
+        if self.mode == "embedding":
+            vec = load_pooled_embedding(
+                self._embedding_path(path), layer=self.layer, ext=self.embedding_ext
+            )
+            return vec, label
         waveform, sr = torchaudio.load(str(path))      # (channels, time)
         waveform = self._to_mono(waveform)
         waveform = self._resample(waveform, sr)
@@ -215,6 +276,10 @@ def get_speaker_dataloaders(
     target_sample_rate: int = 16_000,
     num_samples: Optional[int] = None,
     transform: Optional[Callable] = None,
+    mode: str = "audio",
+    embedding_dir: Optional[str | Path] = None,
+    layer: Union[int, str] = -1,
+    embedding_ext: str = "pt",
     seed: int = 42,
     stratified: bool = True,
     pin_memory: bool = True,
@@ -242,6 +307,10 @@ def get_speaker_dataloaders(
         target_sample_rate=target_sample_rate,
         num_samples=num_samples,
         transform=transform,
+        mode=mode,
+        embedding_dir=embedding_dir,
+        layer=layer,
+        embedding_ext=embedding_ext,
     )
 
     if stratified:

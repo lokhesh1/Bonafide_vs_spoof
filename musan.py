@@ -71,12 +71,17 @@ Typical usage from another file
 from __future__ import annotations
 
 import random
+import sys
 from pathlib import Path
-from typing import Callable, Optional, Sequence
+from typing import Callable, Optional, Sequence, Union
 
 import torch
 from torch.utils.data import DataLoader, Dataset, Subset
 import torchaudio
+
+# Sibling helper for the precomputed-embedding mode.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from embedding_io import embedding_path, load_pooled_embedding
 
 
 # Recognised values for the ``task`` config argument.
@@ -128,9 +133,24 @@ class MusanDataset(Dataset):
         ``torch.manual_seed`` for fully repeatable runs.
     transform:
         Optional callable applied to the fixed-length ``(1, num_samples)``
-        waveform (e.g. MelSpectrogram / MFCC).
+        waveform (e.g. MelSpectrogram / MFCC). Ignored in ``mode="embedding"``.
     file_ext:
         Audio file extension to glob for (default ``"wav"``).
+    mode:
+        ``"audio"`` (default) returns a waveform; ``"embedding"`` returns a
+        precomputed embedding loaded from ``embedding_dir`` (mirroring the audio
+        folder structure). In embedding mode the index is filtered to clips that
+        actually have an embedding file, so it works with a partial extraction
+        (and ``random_crop`` is irrelevant, the window was fixed at extraction).
+    embedding_dir:
+        Root of the mirrored embedding tree for THIS dataset (e.g.
+        ``embeddings/openai__whisper-base/musan``). Required when
+        ``mode="embedding"``.
+    layer:
+        Which layer's mean-pooled vector to return in embedding mode: an ``int``
+        (``-1`` = last layer) -> ``[dim]``, or ``"all"`` -> ``[num_layers, dim]``.
+    embedding_ext:
+        Embedding file extension, ``"pt"`` (default) or ``"npz"``.
     """
 
     DEFAULT_SECONDS = 4.0
@@ -145,6 +165,10 @@ class MusanDataset(Dataset):
         random_crop: bool = False,
         transform: Optional[Callable] = None,
         file_ext: str = "wav",
+        mode: str = "audio",
+        embedding_dir: Optional[str | Path] = None,
+        layer: Union[int, str] = -1,
+        embedding_ext: str = "pt",
     ) -> None:
         self.root_dir = Path(root_dir)
         if not self.root_dir.is_dir():
@@ -169,6 +193,14 @@ class MusanDataset(Dataset):
         self.transform = transform
         self.file_ext = file_ext.lstrip(".")
 
+        if mode not in ("audio", "embedding"):
+            raise ValueError(f"mode must be 'audio' or 'embedding', got {mode!r}")
+        self.mode = mode
+        self.layer = layer
+        self.embedding_ext = embedding_ext.lstrip(".")
+        self.embedding_dir = Path(embedding_dir) if embedding_dir is not None else None
+        self.num_missing_embeddings = 0
+
         # --- build class mapping + (file_path, label) index for the task -----
         self.class_to_idx: dict[str, int] = {}
         self.idx_to_class: dict[int, str] = {}
@@ -182,6 +214,30 @@ class MusanDataset(Dataset):
             raise RuntimeError(
                 f"No *.{self.file_ext} files found for task={self.task!r} under {self.root_dir!r}"
             )
+
+        if self.mode == "embedding":
+            if self.embedding_dir is None:
+                raise ValueError("embedding_dir is required when mode='embedding'")
+            self._filter_to_existing_embeddings()
+
+    # ----- embedding mode helpers ---------------------------------------- #
+    def _embedding_path(self, audio_path: Path) -> Path:
+        return embedding_path(audio_path, self.root_dir, self.embedding_dir, self.embedding_ext)
+
+    def _filter_to_existing_embeddings(self) -> None:
+        """Drop samples whose embedding file is missing (partial extraction)."""
+        kept: list[tuple[Path, int]] = []
+        for path, label in self.samples:
+            if self._embedding_path(path).is_file():
+                kept.append((path, label))
+            else:
+                self.num_missing_embeddings += 1
+        if not kept:
+            raise RuntimeError(
+                f"No embedding files found under {self.embedding_dir!r}; "
+                "run extract_dataset_embeddings.py first."
+            )
+        self.samples = kept
 
     # ----- public helpers ------------------------------------------------- #
     @property
@@ -198,6 +254,11 @@ class MusanDataset(Dataset):
 
     def __getitem__(self, idx: int):
         path, label = self.samples[idx]
+        if self.mode == "embedding":
+            vec = load_pooled_embedding(
+                self._embedding_path(path), layer=self.layer, ext=self.embedding_ext
+            )
+            return vec, label
         waveform, sr = torchaudio.load(str(path))      # (channels, time)
         waveform = self._to_mono(waveform)
         waveform = self._resample(waveform, sr)
@@ -369,6 +430,10 @@ def get_musan_dataloaders(
     target_sample_rate: int = 16_000,
     num_samples: Optional[int] = None,
     transform: Optional[Callable] = None,
+    mode: str = "audio",
+    embedding_dir: Optional[str | Path] = None,
+    layer: Union[int, str] = -1,
+    embedding_ext: str = "pt",
     seed: int = 42,
     stratified: bool = True,
     pin_memory: bool = True,
@@ -410,6 +475,10 @@ def get_musan_dataloaders(
         target_sample_rate=target_sample_rate,
         num_samples=num_samples,
         transform=transform,
+        mode=mode,
+        embedding_dir=embedding_dir,
+        layer=layer,
+        embedding_ext=embedding_ext,
     )
     # Two views over the SAME (sorted, deterministic) file list: one that random-
     # crops for training, one that centre-crops for evaluation.
