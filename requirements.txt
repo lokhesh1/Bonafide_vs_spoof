@@ -1,0 +1,19 @@
+# Python dependencies for the comparative-analysis codebase.
+# Install into a fresh venv:  pip install -r requirements.txt
+# (Everything else used by the code is in the Python standard library.)
+
+# --- embedding extraction: speech_embedding_extractor.py ---
+torch>=2.1
+torchaudio>=2.1          # dataset loaders (audio_mnist / emodb / musan)
+transformers>=4.40       # HF AutoModel / AutoProcessor / AutoConfig
+
+# --- audio I/O & DSP features: src/features/*, audio_io ---
+librosa>=0.10            # load_audio / resample (pulls in soundfile)
+scipy>=1.10              # cqcc / lfcc / mfcc (scipy.fftpack)
+
+# --- numerics & linear probe ---
+numpy>=1.24
+scikit-learn>=1.3        # linear_probe.py (LogisticRegression, metrics)
+
+# --- dataset download: download.py ---
+kagglehub>=0.3
