@@ -214,6 +214,7 @@ def main() -> None:
                         layers=layers,
                         sampling_rate=SAMPLE_RATE,
                         pooling="mean",
+                        include_raw=False,  # store only the pooled [dim] vectors
                         save_path=save_path,
                         save_format=args.format,
                     )

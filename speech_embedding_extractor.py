@@ -116,6 +116,7 @@ class SpeechEmbeddingExtractor:
         layers: LayerSpec = "all",
         sampling_rate: Optional[int] = None,
         pooling: str = "mean",
+        include_raw: bool = True,
         save_path: Optional[Union[str, Path]] = None,
         save_format: str = "pt",
     ) -> Dict[str, object]:
@@ -136,6 +137,11 @@ class SpeechEmbeddingExtractor:
         pooling:
             Time-pooling for the pooled output: ``"mean"`` (mask-aware),
             ``"last"``, or ``"max"``.
+        include_raw:
+            Keep the per-layer raw ``[time, dim]`` sequences in the result (and
+            the ``embedding_layer``). Set ``False`` to store only the pooled
+            ``[dim]`` vectors — far smaller on disk, which is what the dataset
+            loaders consume.
         save_path:
             If given, write the result to this path.
         save_format:
@@ -170,7 +176,8 @@ class SpeechEmbeddingExtractor:
             hs = hidden_states[idx][0]  # drop batch dim -> [time, dim]
             if valid_frames is not None:
                 hs = hs[:valid_frames]  # slicing auto-clamps if estimate is high
-            raw[idx] = hs.float().cpu()
+            if include_raw:
+                raw[idx] = hs.float().cpu()
             pooled[idx] = self._pool(hs, attention_mask, pooling).float().cpu()
 
         result = {
