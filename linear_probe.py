@@ -105,8 +105,8 @@ def linear_probe(
     test_dataloader=None,
     test_size: float = 0.25,
     standardize: bool = True,
-    C: float = 1.0,
-    max_iter: int = 1000,
+    C: float = 0.1,
+    max_iter: int = 500,
     seed: int = 0,
     save_path: Optional[PathLike] = None,
 ) -> Dict[str, float]:
