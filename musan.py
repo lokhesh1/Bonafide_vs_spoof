@@ -79,9 +79,11 @@ import torch
 from torch.utils.data import DataLoader, Dataset, Subset
 import torchaudio
 
-# Sibling helper for the precomputed-embedding mode.
+# Sibling helpers: embedding I/O + librosa-based audio decode (avoids the
+# torchaudio.load -> TorchCodec backend, which may not be installed).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from embedding_io import embedding_path, load_pooled_embedding
+from src.features.audio_io import load_audio
 
 
 # Recognised values for the ``task`` config argument.
@@ -259,9 +261,8 @@ class MusanDataset(Dataset):
                 self._embedding_path(path), layer=self.layer, ext=self.embedding_ext
             )
             return vec, label
-        waveform, sr = torchaudio.load(str(path))      # (channels, time)
-        waveform = self._to_mono(waveform)
-        waveform = self._resample(waveform, sr)
+        wav = load_audio(path, sr=self.target_sample_rate, mono=True)  # 1-D float32 @ target sr
+        waveform = torch.from_numpy(wav).unsqueeze(0)  # (1, time)
         waveform = self._fix_length(waveform)          # (1, num_samples)
         if self.transform is not None:
             waveform = self.transform(waveform)

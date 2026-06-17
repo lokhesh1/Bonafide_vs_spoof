@@ -39,7 +39,7 @@ from typing import Dict, List, Optional, Sequence, Union
 import numpy as np
 import torch
 
-from transformers import AutoConfig, AutoModel, AutoProcessor
+from transformers import AutoConfig, AutoFeatureExtractor, AutoModel, AutoProcessor
 
 # Make `src` importable regardless of the current working directory, then reuse
 # the project's shared audio I/O helpers.
@@ -91,9 +91,19 @@ class SpeechEmbeddingExtractor:
         self.config = AutoConfig.from_pretrained(
             model_name, trust_remote_code=trust_remote_code
         )
-        self.processor = AutoProcessor.from_pretrained(
-            model_name, trust_remote_code=trust_remote_code
-        )
+        # Prefer the full processor (feature extractor + tokenizer). Self-
+        # supervised pretrained encoders (e.g. wav2vec2-xls-r, HuBERT/WavLM
+        # base) ship no tokenizer/vocab.json, so AutoProcessor raises while
+        # trying to build the tokenizer. For pure embedding extraction we only
+        # need the audio front-end, so fall back to the feature extractor.
+        try:
+            self.processor = AutoProcessor.from_pretrained(
+                model_name, trust_remote_code=trust_remote_code
+            )
+        except (OSError, ValueError, TypeError, KeyError):
+            self.processor = AutoFeatureExtractor.from_pretrained(
+                model_name, trust_remote_code=trust_remote_code
+            )
         self.model = AutoModel.from_pretrained(
             model_name,
             torch_dtype=self.dtype,

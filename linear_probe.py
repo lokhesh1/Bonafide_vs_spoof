@@ -158,6 +158,7 @@ def linear_probe(
     pred = model.predict(X_test)
 
 
+
     _, te_counts = np.unique(y_test, return_counts=True)
     result = {
         "accuracy": float(accuracy_score(y_test, pred)),
@@ -294,7 +295,7 @@ def smoke_test() -> bool:
     ok &= np.isclose(via_loader["accuracy"], inf["accuracy"])
 
     # 3) per-layer driver + JSON save; best layer must be an informative one.
-    out_path = Path("data/probe_results/smoke_test.json")
+    out_path = Path("dataa/probe_results/smoke_test.json")
     report = probe_layers(
         {layer: (X, labels) for layer, X in layers.items()},
         save_path=out_path, seed=0,
